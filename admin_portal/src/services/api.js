@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { getAdminAuthHeader } from './auth';
 
 const api = axios.create({
   baseURL: '/api',
@@ -6,6 +7,12 @@ const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
+});
+
+api.interceptors.request.use((config) => {
+  const h = getAdminAuthHeader();
+  if (h) config.headers = { ...config.headers, Authorization: h };
+  return config;
 });
 
 // Global interceptor for error handling
@@ -21,21 +28,16 @@ api.interceptors.response.use(
       body ||
       (error.code === 'ERR_NETWORK' || !error.response
         ? 'Cannot reach API. Start Django on port 8000 (python manage.py runserver).'
+        : error.response?.status === 401
+          ? 'Unauthorized. Please log in.'
+          : error.response?.status === 403
+            ? 'Forbidden. Admin access required.'
         : 'An unexpected error occurred.');
     error.userMessage = message;
     console.error('API Error:', message);
     return Promise.reject(error);
   }
 );
-
-export const complaintService = {
-  submit: (formData) => api.post('/complaints/submit/', formData, {
-    headers: {
-      'Content-Type': 'multipart/form-data',
-    },
-  }),
-  getStatus: (trackingId) => api.get(`/complaints/status/${trackingId}/`),
-};
 
 export const adminService = {
   getComplaints: () => api.get('/management/complaints/'),

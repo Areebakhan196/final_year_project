@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Shield, LayoutDashboard, Search, PlusCircle, Menu, X } from 'lucide-react';
+import { Shield, Search, PlusCircle, Menu, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 const Navbar = () => {
@@ -10,7 +10,6 @@ const Navbar = () => {
   const navItems = [
     { name: 'Submit', path: '/', icon: PlusCircle },
     { name: 'Track', path: '/track', icon: Search },
-    { name: 'Admin', path: '/admin', icon: LayoutDashboard },
   ];
 
   useEffect(() => {
