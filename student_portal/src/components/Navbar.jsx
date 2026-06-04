@@ -1,16 +1,26 @@
 import React, { useState, useEffect } from 'react';
-import { Link, useLocation } from 'react-router-dom';
-import { Shield, Search, PlusCircle, Menu, X } from 'lucide-react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { Shield, Search, PlusCircle, Menu, X, LogIn, UserPlus, LogOut } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useAuth } from '../context/AuthContext';
 
 const Navbar = () => {
   const location = useLocation();
+  const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
+  const { user, logout } = useAuth();
 
   const navItems = [
     { name: 'Submit', path: '/', icon: PlusCircle },
     { name: 'Track', path: '/track', icon: Search },
   ];
+
+  if (!user) {
+    navItems.push(
+      { name: 'Log In', path: '/login', icon: LogIn },
+      { name: 'Register', path: '/register', icon: UserPlus }
+    );
+  }
 
   useEffect(() => {
     setMenuOpen(false);
@@ -36,21 +46,29 @@ const Navbar = () => {
     <>
       <nav className="fixed top-0 left-0 right-0 z-50 bg-navy-900/80 backdrop-blur-lg border-b border-slate-800">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center gap-2 sm:gap-3 h-16">
-            <button
-              type="button"
-              onClick={() => setMenuOpen(true)}
-              className="p-2 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800/80 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/60 shrink-0"
-              aria-expanded={menuOpen}
-              aria-controls="nav-drawer"
-              aria-label="Open menu"
-            >
-              <Menu className="w-6 h-6" />
-            </button>
-            <Link to="/" className="flex items-center space-x-2 min-w-0">
-              <Shield className="w-8 h-8 text-emerald-500 shrink-0" />
-              <span className="text-xl font-bold tracking-tight text-white truncate">Silent Reporter</span>
-            </Link>
+          <div className="flex items-center justify-between h-16">
+            <div className="flex items-center gap-2 sm:gap-3">
+              <button
+                type="button"
+                onClick={() => setMenuOpen(true)}
+                className="p-2 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800/80 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/60 shrink-0"
+                aria-expanded={menuOpen}
+                aria-controls="nav-drawer"
+                aria-label="Open menu"
+              >
+                <Menu className="w-6 h-6" />
+              </button>
+              <Link to="/" className="flex items-center space-x-2 min-w-0">
+                <Shield className="w-8 h-8 text-emerald-500 shrink-0" />
+                <span className="text-xl font-bold tracking-tight text-white truncate">Silent Reporter</span>
+              </Link>
+            </div>
+
+            {user && (
+              <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 px-3 py-1 rounded-full text-xs font-mono font-bold tracking-wider hidden sm:block">
+                ID: {user.unique_student_id}
+              </div>
+            )}
           </div>
         </div>
       </nav>
@@ -94,6 +112,14 @@ const Navbar = () => {
                 </button>
               </div>
 
+              {user && (
+                <div className="px-6 py-4 border-b border-slate-800 bg-navy-800/20 shrink-0">
+                  <p className="text-xs text-slate-500 font-bold uppercase tracking-wider mb-1">Student Account</p>
+                  <p className="text-sm text-slate-200 truncate font-medium">{user.email}</p>
+                  <p className="text-xs text-emerald-400 font-mono font-bold mt-1">ID: {user.unique_student_id}</p>
+                </div>
+              )}
+
               <nav className="flex-1 overflow-y-auto p-4 space-y-1">
                 {navItems.map((item) => {
                   const Icon = item.icon;
@@ -122,6 +148,20 @@ const Navbar = () => {
                     </Link>
                   );
                 })}
+                
+                {user && (
+                  <button
+                    onClick={() => {
+                      logout();
+                      setMenuOpen(false);
+                      navigate('/login');
+                    }}
+                    className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-base font-medium text-red-400 hover:text-red-300 hover:bg-red-500/10 border border-transparent transition-colors mt-auto text-left cursor-pointer"
+                  >
+                    <LogOut className="w-5 h-5 shrink-0 text-red-400" />
+                    <span>Log Out</span>
+                  </button>
+                )}
               </nav>
             </motion.aside>
           </>

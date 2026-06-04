@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   FileText,
+  File,
   Mic,
   Image as ImageIcon,
   Send,
@@ -9,12 +10,15 @@ import {
   ChevronDown,
   Square,
   Trash2,
+  Plus,
 } from 'lucide-react';
 import { toast } from 'react-toastify';
+import { Link } from 'react-router-dom';
 import { complaintService } from '../services/api';
 import { useComplaint } from '../context/ComplaintContext';
-import { useAudioRecorder } from '../hooks/useAudioRecorder';
+import { useAudioRecorder, blobToAudioFile } from '../hooks/useAudioRecorder';
 import { getAudioDurationSeconds } from '../utils/audioDuration';
+import { useAuth } from '../context/AuthContext';
 
 function formatDuration(totalSeconds) {
   const m = Math.floor(totalSeconds / 60);
@@ -24,6 +28,7 @@ function formatDuration(totalSeconds) {
 
 const LandingPage = () => {
   const { saveTrackingId } = useComplaint();
+  const { user } = useAuth();
   const {
     phase: recordPhase,
     seconds: recordSeconds,
@@ -33,9 +38,11 @@ const LandingPage = () => {
     start: startRecording,
     stop: stopRecording,
     discard: discardRecording,
-    extForBlobType,
   } = useAudioRecorder();
   const audioFileInputRef = useRef(null);
+  const processedBlobRef = useRef(null);
+  const evidenceImageInputRef = useRef(null);
+  const evidenceDocInputRef = useRef(null);
 
   const [mode, setMode] = useState('text');
   const [previewDurationSec, setPreviewDurationSec] = useState(null);
@@ -44,7 +51,8 @@ const LandingPage = () => {
     category: 'General',
     textContent: '',
     audioFile: null,
-    evidenceImage: null,
+    evidenceImages: [],
+    evidenceFiles: [],
   });
 
   const categories = [
@@ -59,7 +67,11 @@ const LandingPage = () => {
 
   const audioPreviewUrl = useMemo(() => {
     if (mode !== 'audio' || !formData.audioFile) return null;
-    return URL.createObjectURL(formData.audioFile);
+    try {
+      return URL.createObjectURL(formData.audioFile);
+    } catch {
+      return null;
+    }
   }, [mode, formData.audioFile]);
 
   useEffect(() => {
@@ -76,17 +88,26 @@ const LandingPage = () => {
   }, [mode, discardRecording]);
 
   useEffect(() => {
-    if (recordPhase !== 'stopped' || !recordBlob) return;
-    const ext = extForBlobType(recordBlob.type);
-    const name = `voice-complaint.${ext}`;
-    const file = new File([recordBlob], name, {
-      type: recordBlob.type || 'audio/webm',
-    });
-    setFormData((prev) => ({ ...prev, audioFile: file }));
-    if (recordedDuration > 0) {
-      setPreviewDurationSec(recordedDuration);
+    if (recordPhase !== 'stopped' || !recordBlob) {
+      if (recordPhase === 'idle') processedBlobRef.current = null;
+      return;
     }
-  }, [recordPhase, recordBlob, extForBlobType, recordedDuration]);
+    if (processedBlobRef.current === recordBlob) return;
+    processedBlobRef.current = recordBlob;
+
+    try {
+      const file = blobToAudioFile(recordBlob);
+      setFormData((prev) => ({ ...prev, audioFile: file }));
+      if (recordedDuration > 0) {
+        setPreviewDurationSec(recordedDuration);
+      }
+    } catch (err) {
+      console.error('Failed to process recording:', err);
+      toast.error('Could not save recording. Please try again.');
+      processedBlobRef.current = null;
+      discardRecording();
+    }
+  }, [recordPhase, recordBlob, recordedDuration, discardRecording]);
 
   useEffect(() => {
     if (!formData.audioFile) {
@@ -100,11 +121,15 @@ const LandingPage = () => {
       setPreviewDurationSec(recordedDuration);
     }
 
-    getAudioDurationSeconds(formData.audioFile).then((sec) => {
-      if (!cancelled && sec != null && sec > 0) {
-        setPreviewDurationSec(sec);
-      }
-    });
+    getAudioDurationSeconds(formData.audioFile)
+      .then((sec) => {
+        if (!cancelled && sec != null && sec > 0) {
+          setPreviewDurationSec(sec);
+        }
+      })
+      .catch(() => {
+        /* metadata/decode optional */
+      });
 
     return () => {
       cancelled = true;
@@ -119,13 +144,47 @@ const LandingPage = () => {
     }
   };
 
-  const handleEvidenceImageChange = (e) => {
-    const file = e.target.files?.[0];
-    setFormData((prev) => ({ ...prev, evidenceImage: file || null }));
+  const handleEvidenceImagesChange = (e) => {
+    const files = Array.from(e.target.files || []).filter((f) =>
+      /\.(jpe?g|png)$/i.test(f.name) || f.type.startsWith('image/')
+    );
+    if (files.length > 0) {
+      setFormData((prev) => ({
+        ...prev,
+        evidenceImages: [...prev.evidenceImages, ...files],
+      }));
+    }
+    if (evidenceImageInputRef.current) evidenceImageInputRef.current.value = '';
+  };
+
+  const handleEvidenceDocumentsChange = (e) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length > 0) {
+      setFormData((prev) => ({
+        ...prev,
+        evidenceFiles: [...prev.evidenceFiles, ...files],
+      }));
+    }
+    if (evidenceDocInputRef.current) evidenceDocInputRef.current.value = '';
+  };
+
+  const removeEvidenceImage = (indexToRemove) => {
+    setFormData((prev) => ({
+      ...prev,
+      evidenceImages: prev.evidenceImages.filter((_, idx) => idx !== indexToRemove),
+    }));
+  };
+
+  const removeEvidenceDocument = (indexToRemove) => {
+    setFormData((prev) => ({
+      ...prev,
+      evidenceFiles: prev.evidenceFiles.filter((_, idx) => idx !== indexToRemove),
+    }));
   };
 
   const handleStartRecording = () => {
     if (audioFileInputRef.current) audioFileInputRef.current.value = '';
+    processedBlobRef.current = null;
     setFormData((prev) => ({ ...prev, audioFile: null }));
     discardRecording();
     startRecording();
@@ -136,6 +195,7 @@ const LandingPage = () => {
   };
 
   const handleClearAudio = () => {
+    processedBlobRef.current = null;
     discardRecording();
     setPreviewDurationSec(null);
     setFormData((prev) => ({ ...prev, audioFile: null }));
@@ -158,6 +218,10 @@ const LandingPage = () => {
         return;
       }
     }
+    if (formData.evidenceImages.length === 0) {
+      toast.error('At least one evidence image is mandatory.');
+      return;
+    }
 
     setLoading(true);
     const data = new FormData();
@@ -169,15 +233,31 @@ const LandingPage = () => {
       data.append('audio_file', formData.audioFile);
       data.append('text_content', `Category: ${formData.category} (voice report)`);
     }
-    if (formData.evidenceImage) data.append('evidence_image', formData.evidenceImage);
+    
+    formData.evidenceImages.forEach((file) => {
+      data.append('evidence_images', file);
+    });
+    formData.evidenceFiles.forEach((file) => {
+      data.append('evidence_files', file);
+    });
 
     try {
       const response = await complaintService.submit(data);
       const trackingId = response.data.tracking_id;
       saveTrackingId(trackingId);
-      toast.success('Complaint submitted anonymously!');
+      if (user) {
+        toast.success(`New complaint submitted! Your Tracking ID: ${trackingId}`);
+      } else {
+        toast.success(`Complaint submitted! Save your Tracking ID: ${trackingId}`);
+      }
       handleClearAudio();
-      setFormData({ category: 'General', textContent: '', audioFile: null, evidenceImage: null });
+      setFormData({
+        category: 'General',
+        textContent: '',
+        audioFile: null,
+        evidenceImages: [],
+        evidenceFiles: [],
+      });
     } catch (error) {
       toast.error(error.userMessage || error.response?.data?.error || 'Failed to submit complaint.');
     } finally {
@@ -195,9 +275,19 @@ const LandingPage = () => {
         <h1 className="text-4xl font-extrabold text-white mb-4 tracking-tight sm:text-5xl">
           Report Safely. <span className="text-emerald-500">Stay Silent.</span>
         </h1>
-        <p className="text-lg text-slate-400 max-w-xl mx-auto">
+        <p className="text-lg text-slate-400 max-w-xl mx-auto mb-4">
           Your identity is protected by end-to-end encryption. No personal data is ever stored.
         </p>
+        
+        {user ? (
+          <div className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-lg text-sm font-medium">
+            <span>Logged in as Student ID: <strong className="font-mono">{user.unique_student_id}</strong>. Your report will be linked to this ID.</span>
+          </div>
+        ) : (
+          <div className="inline-flex items-center gap-2 px-4 py-2 bg-yellow-500/5 border border-yellow-500/10 text-yellow-500/90 rounded-lg text-sm font-medium">
+            <span>You are reporting anonymously. <Link to="/login" className="underline hover:text-yellow-400 font-semibold transition-colors">Sign In</Link> or <Link to="/register" className="underline hover:text-yellow-400 font-semibold transition-colors">Register</Link> to track reports under a permanent ID.</span>
+          </div>
+        )}
       </motion.div>
 
       <div className="glass-card p-8">
@@ -356,26 +446,88 @@ const LandingPage = () => {
             )}
           </AnimatePresence>
 
+          {/* Section A: Evidence Images (mandatory) */}
           <div>
-            <label className="block text-sm font-medium text-slate-300 mb-2">Evidence Image (Optional)</label>
-            <div className="flex items-center space-x-4">
+            <label className="block text-sm font-medium text-slate-300 mb-2">
+              Evidence Images <span className="text-red-400">*</span>
+            </label>
+            <p className="text-xs text-slate-500 mb-3">JPG, JPEG, or PNG — at least one image is required.</p>
+            <div className="space-y-3">
+              {formData.evidenceImages.map((file, idx) => (
+                <div key={`img-${idx}-${file.name}`} className="flex items-center justify-between p-3 bg-navy-900 border border-slate-700 rounded-lg">
+                  <div className="flex items-center space-x-3 overflow-hidden min-w-0">
+                    <ImageIcon className="w-5 h-5 text-emerald-500 shrink-0" />
+                    <span className="text-sm text-slate-300 truncate font-medium">{file.name}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => removeEvidenceImage(idx)}
+                    className="p-1.5 text-slate-500 hover:text-red-400 hover:bg-slate-800 rounded-md transition-colors shrink-0"
+                    aria-label="Remove image"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+
               <div className="relative">
                 <input
+                  ref={evidenceImageInputRef}
                   type="file"
-                  accept="image/*"
-                  onChange={handleEvidenceImageChange}
-                  className="absolute inset-0 opacity-0 cursor-pointer"
+                  multiple
+                  accept=".jpg,.jpeg,.png,image/jpeg,image/png"
+                  onChange={handleEvidenceImagesChange}
+                  className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
                 />
-                <div className="btn-secondary flex items-center space-x-2">
-                  <ImageIcon className="w-4 h-4" />
-                  <span>{formData.evidenceImage ? 'Change Image' : 'Upload Image'}</span>
+                <div className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-lg border-2 border-dashed border-emerald-500/40 bg-emerald-500/5 text-emerald-400 hover:border-emerald-500 hover:bg-emerald-500/10 transition-colors font-semibold text-sm">
+                  <Plus className="w-4 h-4" />
+                  <span>Add Image</span>
                 </div>
               </div>
-              {formData.evidenceImage && (
-                <span className="text-xs text-emerald-500 font-medium truncate max-w-[200px]">
-                  {formData.evidenceImage.name}
-                </span>
-              )}
+            </div>
+            {formData.evidenceImages.length === 0 && (
+              <p className="text-xs text-red-400/80 mt-2">At least one evidence image is mandatory.</p>
+            )}
+          </div>
+
+          {/* Section B: Supporting Documents (optional) */}
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-2">
+              Supporting Documents <span className="text-slate-500 font-normal">(optional)</span>
+            </label>
+            <p className="text-xs text-slate-500 mb-3">PDF, DOC, DOCX — you may skip this section.</p>
+            <div className="space-y-3">
+              {formData.evidenceFiles.map((file, idx) => (
+                <div key={`doc-${idx}-${file.name}`} className="flex items-center justify-between p-3 bg-navy-900 border border-slate-700 rounded-lg">
+                  <div className="flex items-center space-x-3 overflow-hidden min-w-0">
+                    <File className="w-5 h-5 text-slate-400 shrink-0" />
+                    <span className="text-sm text-slate-300 truncate font-medium">{file.name}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => removeEvidenceDocument(idx)}
+                    className="p-1.5 text-slate-500 hover:text-red-400 hover:bg-slate-800 rounded-md transition-colors shrink-0"
+                    aria-label="Remove document"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+
+              <div className="relative">
+                <input
+                  ref={evidenceDocInputRef}
+                  type="file"
+                  multiple
+                  accept=".pdf,.doc,.docx,application/pdf,application/msword"
+                  onChange={handleEvidenceDocumentsChange}
+                  className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                />
+                <div className="w-full btn-secondary flex items-center justify-center gap-2 py-3 border-dashed border-slate-600 hover:border-emerald-500/50 transition-colors">
+                  <Plus className="w-4 h-4" />
+                  <span>Add File</span>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -383,14 +535,14 @@ const LandingPage = () => {
             <button
               type="submit"
               disabled={loading || (mode === 'audio' && recordPhase === 'recording')}
-              className="w-full btn-primary flex items-center justify-center space-x-2 py-4 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full btn-primary flex items-center justify-center space-x-2 py-4 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
             >
               {loading ? (
                 <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin" />
               ) : (
                 <>
                   <Send className="w-5 h-5" />
-                  <span className="text-lg">Submit Anonymously</span>
+                  <span className="text-lg">{user ? 'Submit Report' : 'Submit Anonymously'}</span>
                 </>
               )}
             </button>

@@ -4,6 +4,8 @@ import { getAdminAuthHeader } from './auth';
 const api = axios.create({
   baseURL: '/api',
   withCredentials: true,
+  xsrfCookieName: 'csrftoken',
+  xsrfHeaderName: 'X-CSRFToken',
   headers: {
     'Content-Type': 'application/json',
   },
@@ -41,8 +43,12 @@ api.interceptors.response.use(
 
 export const adminService = {
   getComplaints: () => api.get('/management/complaints/'),
-  getComplaintDetail: (trackingId) => api.get(`/management/complaints/${trackingId}/`),
-  updateStatus: (trackingId, status) => api.patch(`/management/complaints/${trackingId}/update/`, { status }),
+  getComplaintDetail: (complaintId) => api.get(`/management/complaints/${complaintId}/`),
+  updateStatus: (complaintId, status, adminRemarks = '') =>
+    api.patch(`/management/complaints/${complaintId}/update/`, {
+      status,
+      ...(adminRemarks.trim() ? { admin_remarks: adminRemarks.trim() } : {}),
+    }),
   getAnalytics: () => api.get('/analytics/summary/'),
 };
 

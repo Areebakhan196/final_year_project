@@ -15,11 +15,26 @@ function pickMimeType() {
   return '';
 }
 
-function extForBlobType(mime) {
+export function extForBlobType(mime) {
   if (!mime) return 'webm';
   if (mime.includes('ogg')) return 'ogg';
   if (mime.includes('mp4') || mime.includes('aac') || mime.includes('mpeg')) return 'm4a';
   return 'webm';
+}
+
+/** Safe File from MediaRecorder blob (avoids render crash when File constructor fails). */
+export function blobToAudioFile(blob) {
+  const ext = extForBlobType(blob?.type);
+  const name = `voice-complaint.${ext}`;
+  const type = blob?.type || 'audio/webm';
+  try {
+    if (typeof File !== 'undefined') {
+      return new File([blob], name, { type });
+    }
+  } catch {
+    /* fall through */
+  }
+  return blob;
 }
 
 /**
@@ -81,10 +96,18 @@ export function useAudioRecorder() {
         const elapsedSec = startedAtRef.current
           ? Math.round((Date.now() - startedAtRef.current) / 1000)
           : 0;
-        setRecordedDuration(elapsedSec);
-        setSeconds(elapsedSec);
-        setBlob(b);
-        setPhase('stopped');
+        if (!b.size) {
+          setError('Recording was empty. Please try again.');
+          setPhase('idle');
+          setBlob(null);
+          setRecordedDuration(0);
+          setSeconds(0);
+        } else {
+          setRecordedDuration(elapsedSec);
+          setSeconds(elapsedSec);
+          setBlob(b);
+          setPhase('stopped');
+        }
         stream.getTracks().forEach((t) => t.stop());
         streamRef.current = null;
         mediaRecorderRef.current = null;
@@ -110,6 +133,13 @@ export function useAudioRecorder() {
     clearTimer();
     const mr = mediaRecorderRef.current;
     if (mr && mr.state === 'recording') {
+      try {
+        if (typeof mr.requestData === 'function') {
+          mr.requestData();
+        }
+      } catch {
+        /* ignore */
+      }
       mr.stop();
     } else {
       streamRef.current?.getTracks().forEach((t) => t.stop());

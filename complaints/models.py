@@ -18,11 +18,19 @@ class Complaint(models.Model):
         ('REJECTED', 'Rejected'),
     ]
 
-    tracking_id = models.CharField(max_length=20, unique=True, editable=False, db_index=True)
+    # Registered students reuse their unique_student_id; multiple complaints may share the same value.
+    tracking_id = models.CharField(max_length=20, editable=False, db_index=True)
+    submitted_by = models.ForeignKey(
+        'auth.User',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='complaints_submitted',
+    )
     encrypted_text = models.TextField(blank=True, null=True)
     audio_file = models.FileField(upload_to='complaints/audio/', blank=True, null=True)
-    evidence_image = models.ImageField(upload_to='complaints/images/', blank=True, null=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
+    admin_remarks = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -39,9 +47,17 @@ class Complaint(models.Model):
         return encryption_tool.decrypt(self.encrypted_text)
 
     def __str__(self):
-        return f"Complaint {self.tracking_id} - {self.status}"
+        return f"Complaint #{self.pk} ({self.tracking_id}) - {self.status}"
 
     class Meta:
         ordering = ['-created_at']
         verbose_name = "Complaint"
         verbose_name_plural = "Complaints"
+
+class ComplaintEvidence(models.Model):
+    complaint = models.ForeignKey(Complaint, related_name='evidences', on_delete=models.CASCADE)
+    file = models.FileField(upload_to='complaints/evidence/')
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Evidence for {self.complaint.tracking_id}"

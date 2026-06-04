@@ -14,7 +14,7 @@ class AdminComplaintDetailView(generics.RetrieveUpdateAPIView):
     queryset = Complaint.objects.all()
     serializer_class = ComplaintStatusSerializer
     permission_classes = [IsStaffUserOrDevOpen]
-    lookup_field = 'tracking_id'
+    lookup_field = 'pk'
 
     def retrieve(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -27,7 +27,7 @@ class AdminComplaintStatusUpdateView(generics.UpdateAPIView):
     queryset = Complaint.objects.all()
     serializer_class = ComplaintStatusSerializer
     permission_classes = [IsStaffUserOrDevOpen]
-    lookup_field = 'tracking_id'
+    lookup_field = 'pk'
 
     def perform_update(self, serializer):
         # Additional logic can be added here (e.g., notification system)

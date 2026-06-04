@@ -1,13 +1,27 @@
 import logging
-from rest_framework import generics, status
+from rest_framework import generics, status, permissions
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from django_ratelimit.decorators import ratelimit
 from django.utils.decorators import method_decorator
 from .models import Complaint
-from .serializers import ComplaintSerializer, ComplaintStatusSerializer
+from .serializers import (
+    ComplaintSerializer,
+    ComplaintStatusSerializer,
+    ComplaintMineSerializer,
+)
 
 logger = logging.getLogger('complaints')
+
+
+def _save_complaint_evidences(complaint, request):
+    from .models import ComplaintEvidence
+
+    for file in request.FILES.getlist('evidence_images'):
+        ComplaintEvidence.objects.create(complaint=complaint, file=file)
+    for file in request.FILES.getlist('evidence_files'):
+        ComplaintEvidence.objects.create(complaint=complaint, file=file)
+
 
 class ComplaintCreateView(generics.CreateAPIView):
     queryset = Complaint.objects.all()
@@ -17,43 +31,103 @@ class ComplaintCreateView(generics.CreateAPIView):
     @method_decorator(ratelimit(key='ip', rate='5/m', method='POST', block=True))
     def post(self, request, *args, **kwargs):
         logger.info("New complaint submission attempt.")
+        if not request.FILES.getlist('evidence_images'):
+            return Response(
+                {"error": "At least one evidence image is mandatory."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         return super().post(request, *args, **kwargs)
 
     def create(self, request, *args, **kwargs):
-        response = super().create(request, *args, **kwargs)
-        tracking_id = response.data.get('tracking_id')
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        instance = self.perform_create(serializer)
+        output = self.get_serializer(instance)
+        response = Response(output.data, status=status.HTTP_201_CREATED)
 
-        # Post-processing must not fail a successful submission (DB row already exists).
-        if response.status_code == status.HTTP_201_CREATED and tracking_id:
+        if instance.audio_file:
             try:
-                instance = Complaint.objects.get(tracking_id=tracking_id)
-                if instance.audio_file:
-                    from .audio_processing import process_audio
-                    process_audio(instance.audio_file.path)
+                from .audio_processing import process_audio
+                process_audio(instance.audio_file.path)
             except Exception as exc:
                 logger.warning(
-                    "Complaint %s saved; optional audio processing skipped: %s",
-                    tracking_id,
+                    "Complaint #%s saved; optional audio processing skipped: %s",
+                    instance.pk,
                     exc,
                 )
 
-        logger.info("Complaint submitted successfully. Tracking ID: %s", tracking_id)
+        logger.info(
+            "Complaint submitted successfully. id=%s tracking_id=%s",
+            instance.pk,
+            instance.tracking_id,
+        )
         return response
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        extra = {}
+        if user.is_authenticated:
+            extra['submitted_by'] = user
+            try:
+                extra['tracking_id'] = user.student_profile.unique_student_id
+            except Exception:
+                pass
+        instance = serializer.save(**extra)
+        _save_complaint_evidences(instance, self.request)
+        return instance
+
+
+class ComplaintMineListView(generics.ListAPIView):
+    """All complaints filed by the logged-in student (new row per submission)."""
+    serializer_class = ComplaintMineSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return Complaint.objects.filter(submitted_by=self.request.user).order_by('-created_at')
+
+
+class ComplaintMineDetailView(generics.RetrieveAPIView):
+    """Single complaint for the logged-in student (by internal id)."""
+    serializer_class = ComplaintStatusSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    lookup_field = 'pk'
+
+    def get_queryset(self):
+        return Complaint.objects.filter(submitted_by=self.request.user)
+
 
 class ComplaintStatusView(generics.RetrieveAPIView):
     queryset = Complaint.objects.all()
     serializer_class = ComplaintStatusSerializer
     lookup_field = 'tracking_id'
 
-    def retrieve(self, request, *args, **kwargs):
+    def get_object(self):
         tracking_id = self.kwargs.get('tracking_id')
-        try:
-            instance = self.get_object()
-            serializer = self.get_serializer(instance)
-            return Response(serializer.data)
-        except Exception as e:
-            logger.warning(f"Failed status check for Tracking ID: {tracking_id}")
-            return Response(
-                {"error": "Complaint not found."}, 
-                status=status.HTTP_404_NOT_FOUND
-            )
+        qs = Complaint.objects.filter(tracking_id=tracking_id).order_by('-created_at')
+        user = self.request.user
+        if user.is_authenticated:
+            qs = qs.filter(submitted_by=user)
+        instance = qs.first()
+        if not instance:
+            from rest_framework.exceptions import NotFound
+            raise NotFound('Complaint not found.')
+        return instance
+
+
+class ComplaintStatusByIdView(generics.RetrieveAPIView):
+    """Status lookup by internal complaint id (anonymous or authenticated)."""
+    queryset = Complaint.objects.all()
+    serializer_class = ComplaintStatusSerializer
+    lookup_field = 'pk'
+
+    def get_object(self):
+        instance = super().get_object()
+        user = self.request.user
+        if (
+            user.is_authenticated
+            and instance.submitted_by_id
+            and instance.submitted_by_id != user.id
+        ):
+            from rest_framework.exceptions import NotFound
+            raise NotFound('Complaint not found.')
+        return instance
