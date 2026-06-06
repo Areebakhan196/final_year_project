@@ -46,6 +46,8 @@ INSTALLED_APPS = [
     # Third party apps
     'rest_framework',
     'rest_framework.authtoken',
+    'cloudinary_storage',
+    'cloudinary',
     
     # Local apps
     'complaints',
@@ -122,6 +124,27 @@ STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
+# Cloudinary Storage Configuration
+import cloudinary
+
+cloudinary.config(
+    cloud_name=env('CLOUD_NAME'),
+    api_key=env('API_KEY'),
+    api_secret=env('API_SECRET'),
+    secure=True,
+)
+
+CLOUDINARY_STORAGE = {
+    'CLOUD_NAME': env('CLOUD_NAME'),
+    'API_KEY': env('API_KEY'),
+    'API_SECRET': env('API_SECRET'),
+    'SECURE': True,
+    # PREFIX defaults to MEDIA_URL (/media/) — public_ids are stored as media/complaints/...
+}
+# PDFs/DOCs: In Cloudinary Console → Settings → Security, enable
+# "Allow delivery of PDF and ZIP files" or document links return HTTP 401.
+DEFAULT_FILE_STORAGE = 'core.storage.AutoMediaCloudinaryStorage'
 
 # Email Configuration
 EMAIL_BACKEND = env('EMAIL_BACKEND', default='django.core.mail.backends.console.EmailBackend')

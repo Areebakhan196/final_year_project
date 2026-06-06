@@ -6,8 +6,8 @@ import {
   Clock,
   Filter,
   Download,
-  ExternalLink,
   BarChart3,
+  ZoomIn,
   Eye,
   X,
   Send,
@@ -17,24 +17,38 @@ import {
 import { toast } from 'react-toastify';
 import { adminService } from '../services/api';
 
-function isEvidenceImage(filePath) {
-  return /\.(jpe?g|png)$/i.test(String(filePath || ''));
+/** API must return https:// Cloudinary URLs; never rewrite those to /media/ paths. */
+function evidenceAbsoluteUrl(stored) {
+  if (stored == null || stored === '') return '';
+  const s = String(stored).trim();
+  if (s.startsWith('https://') || s.startsWith('http://')) return s;
+  if (s.startsWith('/media/')) return s;
+  return '';
+}
+
+function isEvidenceImage(evidence) {
+  if (evidence?.file_type === 'image') return true;
+  if (evidence?.file_type === 'document') return false;
+  const url = evidenceAbsoluteUrl(evidence?.file);
+  const urlWithoutParams = url.split('?')[0].split('#')[0];
+  if (/\/raw\/upload\//i.test(url)) return false;
+  if (/\.(pdf|doc|docx|txt|zip|xls|xlsx|ppt|pptx)$/i.test(urlWithoutParams)) return false;
+  if (/\.(jpe?g|png|gif|webp|bmp)$/i.test(urlWithoutParams)) return true;
+  if (/\/image\/upload\//i.test(url)) return true;
+  return false;
 }
 
 function evidenceFileName(filePath) {
   const s = String(filePath || '');
-  return s.split('/').pop() || 'document';
+  const segment = s.split('/').pop() || 'document';
+  return segment.split('?')[0] || 'document';
 }
 
-/** Build a path the Vite proxy can serve (/media/... includes subfolders like complaints/images/). */
+/** Local /media/ paths only (e.g. audio in dev); Cloudinary URLs pass through unchanged. */
 function mediaFileUrl(stored) {
-  if (stored == null || stored === '') return '';
-  const s = String(stored).trim();
-  if (s.startsWith('http://') || s.startsWith('https://')) {
-    try { return new URL(s).pathname; } catch { return ''; }
-  }
-  const idx = s.indexOf('/media/');
-  if (idx !== -1) return s.slice(idx);
+  const absolute = evidenceAbsoluteUrl(stored);
+  if (absolute) return absolute;
+  const s = String(stored || '').trim();
   if (s.startsWith('/media/')) return s;
   return `/media/${s.replace(/^\/+/, '')}`;
 }
@@ -156,6 +170,65 @@ function RemarksModal({ targetStatus, onConfirm, onCancel }) {
   );
 }
 
+/* ─── Image lightbox (in-portal enlarge, no new tab) ─────────────── */
+function ImageLightboxModal({ imageUrl, onClose }) {
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.body.style.overflow = '';
+    };
+  }, [onClose]);
+
+  if (!imageUrl) return null;
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 md:p-8">
+      <motion.button
+        type="button"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        className="absolute inset-0 bg-black/80 backdrop-blur-md border-0 cursor-default"
+        aria-label="Close preview"
+        onClick={onClose}
+      />
+      <motion.div
+        initial={{ opacity: 0, scale: 0.92 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.92 }}
+        transition={{ type: 'spring', stiffness: 280, damping: 26 }}
+        className="relative z-10 w-full max-w-5xl max-h-[90vh] flex flex-col"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Evidence image preview"
+      >
+        <div className="flex justify-end mb-3">
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-2.5 rounded-xl bg-slate-800/90 border border-slate-600 text-slate-200 hover:bg-slate-700 hover:text-white transition-colors"
+            aria-label="Close"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="rounded-2xl border border-slate-700 bg-navy-900/90 overflow-hidden shadow-2xl flex items-center justify-center p-2">
+          <img
+            src={imageUrl}
+            alt="Evidence full size"
+            className="max-w-full max-h-[calc(90vh-5rem)] w-auto h-auto object-contain rounded-lg"
+          />
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
 /* ─── Admin Dashboard ─────────────────────────────────────────────── */
 const AdminDashboard = () => {
   const [complaints, setComplaints]       = useState([]);
@@ -167,6 +240,7 @@ const AdminDashboard = () => {
 
   // Remarks modal state
   const [modal, setModal] = useState(null); // { targetStatus }
+  const [lightboxImage, setLightboxImage] = useState(null);
 
   useEffect(() => { fetchData(); }, []);
 
@@ -238,6 +312,12 @@ const AdminDashboard = () => {
             targetStatus={modal.targetStatus}
             onConfirm={confirmStatusUpdate}
             onCancel={() => setModal(null)}
+          />
+        )}
+        {lightboxImage && (
+          <ImageLightboxModal
+            imageUrl={lightboxImage}
+            onClose={() => setLightboxImage(null)}
           />
         )}
       </AnimatePresence>
@@ -364,37 +444,41 @@ const AdminDashboard = () => {
                   )}
 
                   {/* Evidence Images */}
-                  {detail.evidences?.some((ev) => isEvidenceImage(ev.file)) && (
+                  {detail.evidences?.some((ev) => isEvidenceImage(ev)) && (
                     <div>
                       <label className="text-xs font-bold text-slate-500 uppercase tracking-widest block mb-2">
                         Evidence Images
                       </label>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         {detail.evidences
-                          .filter((ev) => isEvidenceImage(ev.file))
+                          .filter((ev) => isEvidenceImage(ev))
                           .map((evidence, idx) => {
-                            const fileUrl = mediaFileUrl(evidence.file);
+                            const imageUrl = evidenceAbsoluteUrl(evidence.file);
                             return (
-                              <div
+                              <button
                                 key={evidence.id || `img-${idx}`}
-                                className="relative group rounded-lg overflow-hidden border border-slate-700 h-40 bg-navy-900"
+                                type="button"
+                                onClick={() => imageUrl && setLightboxImage(imageUrl)}
+                                className="relative group rounded-lg overflow-hidden border border-slate-700 h-40 bg-navy-900 w-full text-left cursor-zoom-in focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/60"
                               >
-                                <img
-                                  src={fileUrl}
-                                  alt={`Evidence image ${idx + 1}`}
-                                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                                />
-                                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                                  <a
-                                    href={fileUrl}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="p-2 bg-white/10 backdrop-blur-md rounded-full text-white"
-                                  >
-                                    <ExternalLink className="w-5 h-5" />
-                                  </a>
+                                {imageUrl ? (
+                                  <img
+                                    src={imageUrl}
+                                    alt="Evidence thumbnail"
+                                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                                    loading="lazy"
+                                  />
+                                ) : (
+                                  <div className="w-full h-full flex items-center justify-center text-slate-500 text-sm">
+                                    Image unavailable
+                                  </div>
+                                )}
+                                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
+                                  <span className="p-2 bg-white/10 backdrop-blur-md rounded-full text-white">
+                                    <ZoomIn className="w-5 h-5" />
+                                  </span>
                                 </div>
-                              </div>
+                              </button>
                             );
                           })}
                       </div>
@@ -402,24 +486,33 @@ const AdminDashboard = () => {
                   )}
 
                   {/* Supporting Documents */}
-                  {detail.evidences?.some((ev) => !isEvidenceImage(ev.file)) && (
+                  {detail.evidences?.some((ev) => !isEvidenceImage(ev)) && (
                     <div>
                       <label className="text-xs font-bold text-slate-500 uppercase tracking-widest block mb-2">
                         Supporting Documents
                       </label>
                       <div className="space-y-2">
                         {detail.evidences
-                          .filter((ev) => !isEvidenceImage(ev.file))
+                          .filter((ev) => !isEvidenceImage(ev))
                           .map((evidence, idx) => {
-                            const fileUrl = mediaFileUrl(evidence.file);
+                            const fileUrl = evidenceAbsoluteUrl(evidence.file);
                             const name = evidenceFileName(evidence.file);
+                            if (!fileUrl) {
+                              return (
+                                <div
+                                  key={evidence.id || `doc-${idx}`}
+                                  className="p-3 rounded-lg border border-slate-700 bg-navy-900/50 text-slate-500 text-sm"
+                                >
+                                  Document unavailable
+                                </div>
+                              );
+                            }
                             return (
                               <a
                                 key={evidence.id || `doc-${idx}`}
                                 href={fileUrl}
-                                download={name}
                                 target="_blank"
-                                rel="noreferrer"
+                                rel="noopener noreferrer"
                                 className="flex items-center justify-between gap-3 p-3 rounded-lg border border-slate-700 bg-navy-900/50 hover:bg-slate-800 hover:border-emerald-500/30 transition-colors group"
                               >
                                 <div className="flex items-center gap-3 min-w-0">

@@ -14,13 +14,35 @@ from .serializers import (
 logger = logging.getLogger('complaints')
 
 
+IMAGE_EVIDENCE_PREFIX = 'complaints/evidence/images/'
+DOCUMENT_EVIDENCE_PREFIX = 'complaints/evidence/documents/'
+
+
 def _save_complaint_evidences(complaint, request):
+    """
+    Images → Cloudinary image storage.
+    Documents (PDF/DOC/DOCX) → Cloudinary raw storage (required for non-media files).
+    """
     from .models import ComplaintEvidence
+    from core.storage import save_to_storage, image_evidence_storage, document_storage
 
     for file in request.FILES.getlist('evidence_images'):
-        ComplaintEvidence.objects.create(complaint=complaint, file=file)
+        try:
+            saved_name = save_to_storage(image_evidence_storage, IMAGE_EVIDENCE_PREFIX, file)
+            ComplaintEvidence.objects.create(complaint=complaint, file=saved_name)
+            logger.info("Evidence image uploaded: %s", saved_name)
+        except Exception as exc:
+            logger.exception("Failed to upload evidence image %s: %s", file.name, exc)
+            raise
+
     for file in request.FILES.getlist('evidence_files'):
-        ComplaintEvidence.objects.create(complaint=complaint, file=file)
+        try:
+            saved_name = save_to_storage(document_storage, DOCUMENT_EVIDENCE_PREFIX, file)
+            ComplaintEvidence.objects.create(complaint=complaint, file=saved_name)
+            logger.info("Evidence document uploaded (raw): %s", saved_name)
+        except Exception as exc:
+            logger.exception("Failed to upload evidence document %s: %s", file.name, exc)
+            raise
 
 
 class ComplaintCreateView(generics.CreateAPIView):
